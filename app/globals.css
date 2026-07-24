@@ -1,0 +1,219 @@
+@import url("https://fonts.googleapis.com/css2?family=Comic+Neue:wght@700&family=Press+Start+2P&display=swap");
+
+:root {
+  --primary: #9a7bff;
+  --secondary: #5e35b1;
+  --dark: #1a1a2e;
+  --darker: #0d0d1a;
+  --text: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--darker);
+  color: var(--text);
+  font-family: "Comic Neue", cursive;
+  margin: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: "Press Start 2P", cursive;
+  color: var(--primary);
+  text-shadow: 0 0 10px rgba(154, 123, 255, 0.7);
+}
+
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.main-col {
+  flex: 1;
+  padding: 30px 40px;
+  max-width: 900px;
+}
+
+.sidebar {
+  width: 320px;
+  padding: 30px 20px;
+  border-left: 2px solid var(--dark);
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.signout-btn {
+  background: none;
+  border: 2px solid var(--primary);
+  color: var(--text);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-family: "Comic Neue", cursive;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button,
+.stButton {
+  background-color: var(--secondary);
+  color: white;
+  border-radius: 20px;
+  border: 2px solid var(--primary);
+  font-family: "Comic Neue", cursive;
+  font-weight: 700;
+  transition: all 0.3s ease;
+  padding: 10px 20px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: 0 0 15px var(--primary);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"] {
+  background-color: var(--dark);
+  color: var(--text);
+  border: 2px solid var(--primary);
+  border-radius: 10px;
+  padding: 10px;
+  font-family: "Comic Neue", cursive;
+  width: 100%;
+}
+
+.content-box {
+  background-color: var(--dark);
+  border-radius: 10px;
+  padding: 15px;
+  border-left: 5px solid var(--primary);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  margin: 15px 0;
+}
+
+.history-item {
+  background-color: var(--dark);
+  border-radius: 10px;
+  padding: 10px;
+  margin: 10px 0;
+  border-left: 3px solid var(--primary);
+  transition: all 0.2s ease;
+}
+
+.history-item:hover {
+  transform: translateX(5px);
+  box-shadow: 0 0 10px rgba(154, 123, 255, 0.5);
+}
+
+.history-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.delete-btn {
+  background-color: #ff4b4b;
+  border: 2px solid #ff4b4b;
+  color: white;
+}
+
+.delete-btn:hover:not(:disabled) {
+  transform: scale(1.1);
+  box-shadow: 0 0 15px #ff4b4b;
+}
+
+.download-link {
+  color: var(--primary);
+  font-weight: bold;
+  font-size: 20px;
+  text-decoration: none;
+}
+
+.notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  padding: 15px;
+  background-color: var(--primary);
+  color: white;
+  border-radius: 10px;
+  z-index: 1000;
+  font-family: "Comic Neue", cursive;
+  font-weight: bold;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  animation: fadeIn 0.5s;
+}
+
+.notification.error {
+  background-color: #ff4b4b;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Auth pages */
+.auth-wrapper {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-card {
+  background-color: var(--dark);
+  border-radius: 12px;
+  padding: 30px;
+  width: 360px;
+  border-left: 5px solid var(--primary);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-card h1 {
+  font-size: 16px;
+}
+
+.auth-card h2 {
+  font-size: 13px;
+}
+
+.auth-error {
+  color: #ff8080;
+  font-size: 14px;
+}
+
+.auth-success {
+  color: #9affb0;
+  font-size: 14px;
+}
+
+.auth-switch {
+  font-size: 14px;
+  margin-top: 10px;
+}
