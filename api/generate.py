@@ -26,10 +26,49 @@ Two changes from the original CrewAI version:
 from http.server import BaseHTTPRequestHandler
 import json
 import os
+import re
+import time
 import requests
 import google.generativeai as genai
 
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+
+
+def _load_api_keys():
+    """Collects every configured Gemini key so requests can rotate across them.
+
+    Supports either:
+      - GOOGLE_API_KEY, GOOGLE_API_KEY_2, GOOGLE_API_KEY_3, GOOGLE_API_KEY_4
+        (separate env vars), or
+      - GOOGLE_API_KEYS as a comma-separated list.
+    """
+    keys = []
+
+    combined = os.environ.get("GOOGLE_API_KEYS", "")
+    if combined:
+        keys.extend([k.strip() for k in combined.split(",") if k.strip()])
+
+    for name in ("GOOGLE_API_KEY", "GOOGLE_API_KEY_2", "GOOGLE_API_KEY_3", "GOOGLE_API_KEY_4"):
+        val = os.environ.get(name)
+        if val and val not in keys:
+            keys.append(val)
+
+    return keys
+
+
+API_KEYS = _load_api_keys()
+_key_cursor = {"i": 0}  # module-level so it persists across requests on a warm instance
+
+
+def _next_key_order():
+    """Returns all configured keys starting from the next one in rotation,
+    so consecutive requests spread across keys and a 429 can fall through
+    to the next key within the same request."""
+    if not API_KEYS:
+        return []
+    start = _key_cursor["i"] % len(API_KEYS)
+    _key_cursor["i"] = (start + 1) % len(API_KEYS)
+    return API_KEYS[start:] + API_KEYS[:start]
 
 
 def verify_supabase_user(access_token: str):
@@ -55,11 +94,8 @@ class ArticleTopicGenerator:
     text is preserved verbatim, just run directly instead of through CrewAI,
     and exposed one stage at a time instead of all at once."""
 
-    def __init__(self):
-        GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-        if not GOOGLE_API_KEY:
-            raise ValueError("GOOGLE_API_KEY environment variable not set.")
-        genai.configure(api_key=GOOGLE_API_KEY)
+    def __init__(self, api_key):
+        genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel(
             "gemini-3.5-flash",
             generation_config={"temperature": 0.8},
@@ -204,6 +240,69 @@ Now produce your output. Follow the instructions and expected output format exac
 VALID_STAGES = {"plan", "research", "condense", "links", "write"}
 
 
+def run_with_key_rotation(stage_method_name, *args, max_wait_seconds=25):
+    """Tries every configured Gemini key for this stage. If a key is out of
+    quota (429), immediately falls through to the next key with no delay.
+
+    The timer for the wait starts at the FIRST 429 in this pass (not after
+    every key has been tried), so by the time all keys have been exhausted,
+    some of Google's suggested retry_delay has usually already elapsed just
+    from making those fallback calls. We only sleep the remainder.
+    """
+    key_order = _next_key_order()
+    if not key_order:
+        raise ValueError(
+            "No Gemini API key configured (GOOGLE_API_KEY / GOOGLE_API_KEY_2 / "
+            "GOOGLE_API_KEY_3 / GOOGLE_API_KEY_4)."
+        )
+
+    def _try_all_keys():
+        last_err = None
+        timer_start = None
+        for key in key_order:
+            try:
+                generator = ArticleTopicGenerator(key)
+                method = getattr(generator, stage_method_name)
+                return True, method(*args), timer_start
+            except Exception as e:
+                msg = str(e)
+                if "429" in msg or "quota" in msg.lower() or "rate limit" in msg.lower():
+                    if timer_start is None:
+                        timer_start = time.monotonic()  # start the clock on the first 429
+                    last_err = e
+                    continue
+                raise
+        return False, last_err, timer_start
+
+    ok, result, timer_start = _try_all_keys()
+    if ok:
+        return result
+
+    # Every key failed. Google told us roughly how long until quota frees up
+    # (retry_delay); subtract the time we already spent trying the other
+    # keys before we ever sleep.
+    requested_delay = _parse_retry_delay_seconds(str(result), default=5, cap=max_wait_seconds)
+    elapsed = time.monotonic() - timer_start if timer_start is not None else 0
+    remaining = max(0.0, requested_delay - elapsed)
+    if remaining > 0:
+        time.sleep(remaining)
+
+    ok, result, _ = _try_all_keys()
+    if ok:
+        return result
+
+    raise result or Exception("All Gemini API keys are out of quota.")
+
+
+def _parse_retry_delay_seconds(error_message, default=5, cap=25):
+    """Pulls the seconds out of Google's `retry_delay { seconds: N }` field
+    in the error message, falling back to `default` if it's not present."""
+    match = re.search(r"retry_delay\s*{\s*seconds:\s*(\d+)", error_message)
+    if match:
+        return min(int(match.group(1)), cap)
+    return default
+
+
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
@@ -229,38 +328,36 @@ class handler(BaseHTTPRequestHandler):
             self._respond(400, {"error": "theme is required"})
             return
 
-        if not os.environ.get("GOOGLE_API_KEY"):
-            self._respond(500, {"error": "GOOGLE_API_KEY not set on the server"})
+        if not API_KEYS:
+            self._respond(500, {"error": "No Gemini API key set on the server (GOOGLE_API_KEY / GOOGLE_API_KEY_2 / GOOGLE_API_KEY_3 / GOOGLE_API_KEY_4)"})
             return
 
         try:
-            generator = ArticleTopicGenerator()
-
             if stage == "plan":
-                output = generator.plan(theme, num_topics)
+                output = run_with_key_rotation("plan", theme, num_topics)
                 self._respond(200, {"output": output})
 
             elif stage == "research":
                 planner_output = body.get("planner_output") or ""
-                output = generator.research(theme, num_topics, planner_output)
+                output = run_with_key_rotation("research", theme, num_topics, planner_output)
                 self._respond(200, {"output": output})
 
             elif stage == "condense":
                 research_output = body.get("research_output") or ""
-                output = generator.condense(research_output)
+                output = run_with_key_rotation("condense", research_output)
                 self._respond(200, {"output": output})
 
             elif stage == "links":
                 research_output = body.get("research_output") or ""
-                output = generator.links(research_output)
+                output = run_with_key_rotation("links", research_output)
                 self._respond(200, {"output": output})
 
             elif stage == "write":
                 planner_output = body.get("planner_output") or ""
                 condensed_output = body.get("condensed_output") or ""
                 links_output = body.get("links_output") or ""
-                content = generator.write(
-                    theme, num_topics, planner_output, condensed_output, links_output
+                content = run_with_key_rotation(
+                    "write", theme, num_topics, planner_output, condensed_output, links_output
                 )
                 self._respond(200, {"content": content})
 

@@ -40,6 +40,7 @@ export default function Home() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   // The single history item currently expanded in the main panel (only one at a time)
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -250,7 +251,15 @@ export default function Home() {
   // clicking a different item expands that one and auto-compresses the rest.
   function toggleActive(id: string) {
     setActiveId((prev) => (prev === id ? null : id));
-    if (!loading) setTheme("");
+    if (!loading) {
+      setTheme("");
+      // The stage tracker belongs to whatever was just generated; once the
+      // person switches to viewing a different report, it's stale - hide it.
+      setStageTimes({});
+      setActiveStage(null);
+      setGenStart(null);
+      setGenEnd(null);
+    }
   }
 
   return (
@@ -355,39 +364,52 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="sidebar">
-        <h2 style={{ fontSize: 16 }}>📚 Generation History</h2>
-        {history.length === 0 && <p>No history yet</p>}
-        {history.map((item) => {
-          const isActive = activeId === item.id;
-          return (
-            <div className={`history-item${isActive ? " selected" : ""}`} key={item.id}>
-              <strong>
-                {item.theme} ({item.topic_count} topics)
-              </strong>
-              <p className="history-meta">{new Date(item.created_at).toLocaleString()}</p>
+      <div className={`sidebar${sidebarCollapsed ? " collapsed" : ""}`}>
+        <div className="sidebar-header">
+          {!sidebarCollapsed && <h2 style={{ fontSize: 16 }}>📚 Generation History</h2>}
+          <button
+            className="sidebar-toggle-btn"
+            onClick={() => setSidebarCollapsed((c) => !c)}
+            title={sidebarCollapsed ? "Show history" : "Hide history"}
+          >
+            {sidebarCollapsed ? "▶" : "◀"}
+          </button>
+        </div>
+        {!sidebarCollapsed && (
+          <>
+            {history.length === 0 && <p>No history yet</p>}
+            {history.map((item) => {
+              const isActive = activeId === item.id;
+              return (
+                <div className={`history-item${isActive ? " selected" : ""}`} key={item.id}>
+                  <strong>
+                    {item.theme} ({item.topic_count} topics)
+                  </strong>
+                  <p className="history-meta">{new Date(item.created_at).toLocaleString()}</p>
 
-              <p className="history-preview">{item.content.slice(0, 160)}...</p>
+                  <p className="history-preview">{item.content.slice(0, 160)}...</p>
 
-              <div className="history-actions">
-                <button onClick={() => toggleActive(item.id)}>
-                  {isActive ? "🗜️ Compress" : "🔎 Expand"}
-                </button>
-                <button
-                  onClick={() => downloadMarkdown(item.content, item.theme)}
-                >
-                  📥 Download
-                </button>
-                <button
-                  className="delete-btn"
-                  onClick={() => deleteHistoryItem(item.id)}
-                >
-                  🗑️ Delete
-                </button>
-              </div>
-            </div>
-          );
-        })}
+                  <div className="history-actions">
+                    <button onClick={() => toggleActive(item.id)}>
+                      {isActive ? "🗜️ Compress" : "🔎 Expand"}
+                    </button>
+                    <button
+                      onClick={() => downloadMarkdown(item.content, item.theme)}
+                    >
+                      📥 Download
+                    </button>
+                    <button
+                      className="delete-btn"
+                      onClick={() => deleteHistoryItem(item.id)}
+                    >
+                      🗑️ Delete
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
       </div>
     </div>
   );

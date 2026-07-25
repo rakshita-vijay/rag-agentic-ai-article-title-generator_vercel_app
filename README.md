@@ -39,7 +39,10 @@ Same 5-stage Gemini pipeline as the original Streamlit app, now:
 4. Copy `.env.example` to `.env.local` and fill in:
    - `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` (Supabase
      → Project Settings → API)
-   - `GOOGLE_API_KEY` (same Gemini key as before)
+   - `GOOGLE_API_KEY` (Gemini key). Optionally also set `GOOGLE_API_KEY_2`,
+     `GOOGLE_API_KEY_3`, and `GOOGLE_API_KEY_4` to rotate across up to 4
+     keys — note free-tier quota is per Google Cloud **project**, so these
+     only help if each key comes from a separate project.
 
 ## Local dev
 

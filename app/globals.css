@@ -81,6 +81,42 @@ p {
   padding: 30px 20px;
   border-right: 2px solid var(--dark);
   order: -1;
+  transition: width 0.2s ease, padding 0.2s ease;
+}
+
+.sidebar.collapsed {
+  width: 44px;
+  padding: 30px 8px;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar.collapsed .sidebar-header {
+  justify-content: center;
+}
+
+.sidebar-toggle-btn {
+  background: none;
+  border: 2px solid var(--primary);
+  color: var(--text);
+  border-radius: 12px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  font-family: "Comic Neue", cursive;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
 .topbar {
