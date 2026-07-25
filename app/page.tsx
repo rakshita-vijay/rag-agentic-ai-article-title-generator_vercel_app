@@ -37,14 +37,9 @@ export default function Home() {
   const [theme, setTheme] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{
-    content: string;
-    theme: string;
-    topic_count: number;
-  } | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  // Items pinned open in the main panel (keyed by history item id)
-  const [pinned, setPinned] = useState<Record<string, boolean>>({});
+  // The single history item currently expanded in the main panel (only one at a time)
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -156,7 +151,6 @@ export default function Home() {
 
     setLoading(true);
     setError(null);
-    setResult(null);
     setStageTimes({});
     setActiveStage(null);
     setGenEnd(null);
@@ -211,20 +205,17 @@ export default function Home() {
       });
       endStage("write");
 
-      setResult({
-        content,
-        theme,
-        topic_count: numTopics,
-      });
-
       // Save to history (RLS ensures this only ever writes the caller's own row)
-      await supabase.from("history").insert({
-        theme,
-        content,
-        topic_count: numTopics,
-      });
+      const { data: inserted } = await supabase
+        .from("history")
+        .insert({ theme, content, topic_count: numTopics })
+        .select()
+        .single();
 
       await loadHistory();
+      // The freshly generated report becomes the one and only item shown
+      // in the main panel; any previously expanded item is auto-minimized.
+      if (inserted) setActiveId(inserted.id);
       notifyDone(theme);
     } catch (err: any) {
       setError(err.message || "Something went wrong");
@@ -252,24 +243,14 @@ export default function Home() {
   async function deleteHistoryItem(id: string) {
     await supabase.from("history").delete().eq("id", id);
     setHistory((h) => h.filter((item) => item.id !== id));
-    setPinned((prev) => {
-      if (!prev[id]) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
+    setActiveId((prev) => (prev === id ? null : prev));
   }
 
-  function togglePinned(id: string) {
-    setPinned((prev) => {
-      const next = { ...prev };
-      if (next[id]) {
-        delete next[id];
-      } else {
-        next[id] = true;
-      }
-      return next;
-    });
+  // Acts like a switch: clicking the already-expanded item compresses it;
+  // clicking a different item expands that one and auto-compresses the rest.
+  function toggleActive(id: string) {
+    setActiveId((prev) => (prev === id ? null : id));
+    if (!loading) setTheme("");
   }
 
   return (
@@ -339,39 +320,34 @@ export default function Home() {
         {error && <div className="notification error">❌ {error}</div>}
         {notice && <div className="notification">{notice}</div>}
 
-        {result && (
-          <>
-            <h3>📝 Generated Topics</h3>
-            <div className="content-box">
-              <ReactMarkdown>{result.content}</ReactMarkdown>
-            </div>
-            <a
-              className="download-link"
-              onClick={() => downloadMarkdown(result.content, result.theme)}
-            >
-              📥 Download Topics
-            </a>
-          </>
-        )}
-
-        {history
-          .filter((item) => pinned[item.id])
-          .map((item) => (
-            <div className="pinned-item" key={item.id}>
+        {(() => {
+          const activeItem = history.find((item) => item.id === activeId);
+          if (!activeItem) return null;
+          return (
+            <div className="pinned-item">
               <div className="pinned-header">
                 <div>
                   <strong>
-                    📌 {item.theme} ({item.topic_count} topics)
+                    📌 {activeItem.theme} ({activeItem.topic_count} topics)
                   </strong>
-                  <p className="history-meta">{new Date(item.created_at).toLocaleString()}</p>
+                  <p className="history-meta">
+                    {new Date(activeItem.created_at).toLocaleString()}
+                  </p>
                 </div>
-                <button onClick={() => togglePinned(item.id)}>🗜️ Compress</button>
+                <button onClick={() => toggleActive(activeItem.id)}>🗜️ Compress</button>
               </div>
               <div className="content-box">
-                <ReactMarkdown>{item.content}</ReactMarkdown>
+                <ReactMarkdown>{activeItem.content}</ReactMarkdown>
               </div>
+              <a
+                className="download-link"
+                onClick={() => downloadMarkdown(activeItem.content, activeItem.theme)}
+              >
+                📥 Download Topics
+              </a>
             </div>
-          ))}
+          );
+        })()}
 
         <p style={{ marginTop: 40, opacity: 0.7 }}>
           🤖 Powered by Gemini 3.5 Flash
@@ -383,9 +359,9 @@ export default function Home() {
         <h2 style={{ fontSize: 16 }}>📚 Generation History</h2>
         {history.length === 0 && <p>No history yet</p>}
         {history.map((item) => {
-          const isPinned = !!pinned[item.id];
+          const isActive = activeId === item.id;
           return (
-            <div className={`history-item${isPinned ? " selected" : ""}`} key={item.id}>
+            <div className={`history-item${isActive ? " selected" : ""}`} key={item.id}>
               <strong>
                 {item.theme} ({item.topic_count} topics)
               </strong>
@@ -394,8 +370,8 @@ export default function Home() {
               <p className="history-preview">{item.content.slice(0, 160)}...</p>
 
               <div className="history-actions">
-                <button onClick={() => togglePinned(item.id)}>
-                  {isPinned ? "🗜️ Compress" : "🔎 Expand"}
+                <button onClick={() => toggleActive(item.id)}>
+                  {isActive ? "🗜️ Compress" : "🔎 Expand"}
                 </button>
                 <button
                   onClick={() => downloadMarkdown(item.content, item.theme)}
