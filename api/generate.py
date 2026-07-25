@@ -4,19 +4,26 @@ Vercel serverless function: POST /api/generate
 Body: { "theme": str, "num_topics": int }
 Header: Authorization: Bearer <supabase access token>
 
-This wraps the *same* CrewAI agent/task pipeline that used to live in
-streamlit_version/generator.py. The multi-agent logic itself is unchanged -
-only the outer shell (no more Streamlit session_state / callbacks, an
-HTTP handler instead of a Streamlit script, and a Supabase auth check)
-is new.
+This runs the same 5-stage pipeline that used to live in
+streamlit_version/generator.py (Topic Planner -> Topic Researcher ->
+Summary Generator -> Link Collector -> Article Prompt Writer), with the
+exact same role/goal/backstory/task text for each stage.
+
+The one real change: it no longer uses the `crewai` library to run that
+pipeline. CrewAI's own dependency tree (chromadb, onnxruntime, langchain,
+a kubernetes client, etc.) is ~800MB by itself, regardless of which
+features you actually use - and Vercel hard-caps serverless functions at
+500MB. So instead of CrewAI's Agent/Task/Crew classes, each stage below is
+a direct sequential call to Gemini, with the previous stage's output fed
+in as context for the next - same handoff behavior, no heavy framework.
 """
 
 from http.server import BaseHTTPRequestHandler
 import json
 import os
-import asyncio
 import requests
-from crewai import Agent, Task, Crew, LLM
+from concurrent.futures import ThreadPoolExecutor
+import google.generativeai as genai
 
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
 
@@ -39,78 +46,43 @@ def verify_supabase_user(access_token: str):
 
 
 class ArticleTopicGenerator:
-    """Unchanged from streamlit_version/generator.py, minus the
-    Streamlit-specific progress callback (no st.session_state here)."""
+    """Same 5-stage pipeline as streamlit_version/generator.py's CrewAI
+    agents/tasks - each stage's role/goal/backstory/description/expected_output
+    text is preserved verbatim, just run directly instead of through CrewAI."""
 
     def __init__(self):
-        self.setup_llm()
-
-    def setup_llm(self):
         GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
         if not GOOGLE_API_KEY:
             raise ValueError("GOOGLE_API_KEY environment variable not set.")
-
-        self.llm = LLM(
-            model="gemini/gemini-2.0-flash",
-            temperature=0.8,
-            api_key=GOOGLE_API_KEY,
+        genai.configure(api_key=GOOGLE_API_KEY)
+        self.model = genai.GenerativeModel(
+            "gemini-3.5-flash",
+            generation_config={"temperature": 0.8},
         )
 
-    def create_agents(self, theme, number_of_topics):
-        self.planner = Agent(
+    def _run_stage(self, role, goal, backstory, description, expected_output, context):
+        prompt = f"""You are acting as the "{role}" in a multi-step content pipeline.
+
+Your goal: {goal}
+
+Your backstory / working relationship with the rest of the pipeline: {backstory}
+
+Instructions for this step:
+{description}
+
+Expected output: {expected_output}
+
+{context}
+
+Now produce your output. Follow the instructions and expected output format exactly, with no extra commentary before or after it."""
+        response = self.model.generate_content(prompt)
+        return response.text
+
+    def generate_topics(self, theme, number_of_topics):
+        planner_output = self._run_stage(
             role="Topic Planner",
             goal=f"To collect {number_of_topics} engaging topics related to the theme: {theme}, addressed to an academic audience",
             backstory=f"You have been given a theme - {theme} - and you must collect {number_of_topics} topics related to the theme, for people to write articles about. It can be in-depth core topics related to the theme, or informatory topics as well. Your work is the basis for the user to write an article (college graduate level) on these topics.",
-            llm=self.llm,
-            max_iter=100,
-            verbose=False,
-            allow_delegation=False,
-        )
-
-        self.researcher = Agent(
-            role="Topic Researcher",
-            goal=f"To collect in-depth information (and their sources) on the {number_of_topics} {theme}-related topics provided by the Topic Planner",
-            backstory="For each topic given by the Topic Planner, you will do in-depth research into each, collect information and their source links, and send the links to the Link Collector. Also, you send the relevant informaton you have collected to the Summary Generator.",
-            llm=self.llm,
-            max_iter=100,
-            verbose=False,
-            allow_delegation=True,
-        )
-
-        self.condenser = Agent(
-            role="Summary Generator",
-            goal="To condense paragraphs of information into a title-one liner duo and show it to the user",
-            backstory="You will take the information the Topic Researcher, and split it into small chunks. Then you will condense it into a bullet point-worth of information and title each of these bullets. The user will elaborate on each point, by themselves, as they see fit. This should be shown to the user under the title 'Condensed Information Points:'",
-            llm=self.llm,
-            max_iter=100,
-            verbose=False,
-            allow_delegation=False,
-        )
-
-        self.collector = Agent(
-            role="Link Collector",
-            goal="To collect all the links of the material that were used as sources by the Topic Researcher",
-            backstory="You will take all the links from the researcher, and show them to the user at the end of the response under the title: 'Resources Used:'",
-            llm=self.llm,
-            max_iter=100,
-            verbose=False,
-            allow_delegation=False,
-        )
-
-        self.writer = Agent(
-            role="Article Prompt Writer",
-            goal=f"To take each topic from the {number_of_topics} topics the Topic Planner has generated, give the condensed article prompt the Summary Generator has generated for the same, and then the links the Link Collector has collected for the same topic, and repeat the steps for the rest of the topics",
-            backstory=f"The Topic Planner has sent {number_of_topics} topics to the Topic Researcher, who sent the information to the Summary Generator and the research links to the Link Collector, who have all sent their information chunks to you, who orders it and shows it to the user.",
-            llm=self.llm,
-            max_iter=100,
-            verbose=False,
-            allow_delegation=False,
-        )
-
-    def create_tasks(self, theme, number_of_topics):
-        self.plan = Task(
-            name="Planning",
-            agent=self.planner,
             description=f"""
             1. Identify the latest trends related to {theme}, along with key players and noteworthy news
             2. Identify the target audience based on {theme} and collect relevant headlines/topics
@@ -122,12 +94,14 @@ class ArticleTopicGenerator:
                 3. Topic Three
             6. Send the list to the Topic Researcher""",
             expected_output=f"A {number_of_topics}-item numbered list of {theme}-related topics with no extra text",
+            context="",
         )
 
-        self.research = Task(
-            name="Researching",
-            agent=self.researcher,
-            description=f"""
+        research_output = self._run_stage(
+            role="Topic Researcher",
+            goal=f"To collect in-depth information (and their sources) on the {number_of_topics} {theme}-related topics provided by the Topic Planner",
+            backstory="For each topic given by the Topic Planner, you will do in-depth research into each, collect information and their source links, and send the links to the Link Collector. Also, you send the relevant informaton you have collected to the Summary Generator.",
+            description="""
             For each topic received from the Topic Planner:
             1. Conduct in-depth research on the topic
             2. Use at least 5-6 sources
@@ -148,12 +122,15 @@ class ArticleTopicGenerator:
             2. <exact link here>
             7. Send the research findings to the Summary Generator""",
             expected_output="Structured research findings with exact source links for all topics",
+            context=f"Topics from the Topic Planner:\n{planner_output}",
         )
 
-        self.textCondense = Task(
-            name="Condensing",
-            agent=self.condenser,
-            description=f"""
+        def run_condenser():
+            return self._run_stage(
+                role="Summary Generator",
+                goal="To condense paragraphs of information into a title-one liner duo and show it to the user",
+                backstory="You will take the information the Topic Researcher, and split it into small chunks. Then you will condense it into a bullet point-worth of information and title each of these bullets. The user will elaborate on each point, by themselves, as they see fit. This should be shown to the user under the title 'Condensed Information Points:'",
+                description="""
             1. Receive research content from Topic Researcher
             2. For each logical chunk:
                 a. Create a bolded heading (1-3 words)
@@ -166,13 +143,16 @@ class ArticleTopicGenerator:
                 ### Condensed Information Points
                 - **Brain-Computer Interface:** Direct pathway between brain and external devices
                 - **Neural Signals:** BCIs interpret signals to control computers""",
-            expected_output="Markdown section with bolded headings and colon-separated summaries",
-        )
+                expected_output="Markdown section with bolded headings and colon-separated summaries",
+                context=f"Research findings from the Topic Researcher:\n{research_output}",
+            )
 
-        self.linkCollection = Task(
-            name="Link Collecting",
-            agent=self.collector,
-            description="""
+        def run_link_collector():
+            return self._run_stage(
+                role="Link Collector",
+                goal="To collect all the links of the material that were used as sources by the Topic Researcher",
+                backstory="You will take all the links from the researcher, and show them to the user at the end of the response under the title: 'Resources Used:'",
+                description="""
             1. Collect all source links from Topic Researcher
             2. Format as:
                 - Heading: "### Resources Used"
@@ -183,12 +163,20 @@ class ArticleTopicGenerator:
                 ### Resources Used
                 1. https://www.nature.com/articles/bci-technology
                 2. https://ieeexplore.ieee.org/document/123456""",
-            expected_output="Numbered list of exact source URLs under heading",
-        )
+                expected_output="Numbered list of exact source URLs under heading",
+                context=f"Research findings (containing the source links) from the Topic Researcher:\n{research_output}",
+            )
 
-        self.chunkJoin = Task(
-            name="Joining, Formatting, and Writing",
-            agent=self.writer,
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            condense_future = executor.submit(run_condenser)
+            links_future = executor.submit(run_link_collector)
+            condensed_output = condense_future.result()
+            links_output = links_future.result()
+
+        final_output = self._run_stage(
+            role="Article Prompt Writer",
+            goal=f"To take each topic from the {number_of_topics} topics the Topic Planner has generated, give the condensed article prompt the Summary Generator has generated for the same, and then the links the Link Collector has collected for the same topic, and repeat the steps for the rest of the topics",
+            backstory=f"The Topic Planner has sent {number_of_topics} topics to the Topic Researcher, who sent the information to the Summary Generator and the research links to the Link Collector, who have all sent their information chunks to you, who orders it and shows it to the user.",
             description=f"""
             For each of the {number_of_topics} topics:
             1. Start with H2 heading: "## [Topic Name]"
@@ -202,30 +190,21 @@ class ArticleTopicGenerator:
 
                 ### Resources Used
                 1. <exact link here>
-                5. Do not add commentary or summaries""",
-            expected_output=f"Structured output with headings, bullet points, and exact links for all topics",
+            5. Do not add commentary or summaries""",
+            expected_output="Structured output with headings, bullet points, and exact links for all topics",
+            context=(
+                f"Topics from the Topic Planner:\n{planner_output}\n\n"
+                f"Condensed Information Points from the Summary Generator:\n{condensed_output}\n\n"
+                f"Resources Used from the Link Collector:\n{links_output}"
+            ),
         )
 
-    async def generate_topics(self, theme, number_of_topics):
-        self.create_agents(theme, number_of_topics)
-        self.create_tasks(theme, number_of_topics)
-
-        crew = Crew(
-            agents=[self.planner, self.researcher, self.condenser, self.collector, self.writer],
-            tasks=[self.plan, self.research, self.textCondense, self.linkCollection, self.chunkJoin],
-            process="sequential",
-            verbose=False,
-            memory=False,
-        )
-
-        return await crew.kickoff_async(
-            inputs={"theme": theme, "number of topics": number_of_topics}
-        )
+        return final_output
 
 
-async def generate_article_topics(theme, num_topics):
+def generate_article_topics(theme, num_topics):
     generator = ArticleTopicGenerator()
-    return await generator.generate_topics(theme, num_topics)
+    return generator.generate_topics(theme, num_topics)
 
 
 class handler(BaseHTTPRequestHandler):
@@ -253,8 +232,8 @@ class handler(BaseHTTPRequestHandler):
             return
 
         try:
-            result = asyncio.run(generate_article_topics(theme, num_topics))
-            self._respond(200, {"content": result.raw})
+            content = generate_article_topics(theme, num_topics)
+            self._respond(200, {"content": content})
         except Exception as e:
             self._respond(500, {"error": str(e)})
 

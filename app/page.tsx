@@ -1,9 +1,11 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
-import { createClient } from "@/lib/supabase/client";
+import { createClient } from "../lib/supabase/client";
 
 type HistoryItem = {
   id: string;
@@ -28,10 +30,15 @@ export default function Home() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     loadUser();
     loadHistory();
+
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
   }, []);
 
   async function loadUser() {
@@ -48,6 +55,21 @@ export default function Home() {
       .order("created_at", { ascending: false })
       .limit(5);
     if (data) setHistory(data as HistoryItem[]);
+  }
+
+  function notifyDone(forTheme: string) {
+    setNotice(`✅ Topics for "${forTheme}" are ready!`);
+    setTimeout(() => setNotice(null), 6000);
+
+    if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
+      const n = new Notification("Article Topic Generator", {
+        body: `Topics for "${forTheme}" are ready!`,
+      });
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+    }
   }
 
   async function handleSignOut() {
@@ -80,7 +102,17 @@ export default function Home() {
         body: JSON.stringify({ theme, num_topics: numTopics }),
       });
 
-      const data = await res.json();
+      const raw = await res.text();
+      let data: any;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw new Error(
+          res.status === 504 || /timeout/i.test(raw)
+            ? "Generation timed out on the server - try again, or a shorter/simpler theme."
+            : "The server returned an unexpected response. Please try again."
+        );
+      }
 
       if (!res.ok) {
         throw new Error(data.error || "Generation failed");
@@ -100,6 +132,7 @@ export default function Home() {
       });
 
       await loadHistory();
+      notifyDone(theme);
     } catch (err: any) {
       setError(err.message || "Something went wrong");
     } finally {
@@ -158,6 +191,7 @@ export default function Home() {
         </form>
 
         {error && <div className="notification error">❌ {error}</div>}
+        {notice && <div className="notification">{notice}</div>}
 
         {result && (
           <>
@@ -175,7 +209,7 @@ export default function Home() {
         )}
 
         <p style={{ marginTop: 40, opacity: 0.7 }}>
-          🤖 Powered by CrewAI &amp; Gemini 2.0 Flash
+          🤖 Powered by Gemini 3.5 Flash
         </p>
       </div>
 

@@ -1,6 +1,6 @@
 # Article Topic Generator (Vercel + Supabase)
 
-Same CrewAI/Gemini multi-agent pipeline as the original Streamlit app, now:
+Same 5-stage Gemini pipeline as the original Streamlit app, now:
 - deployed as a Next.js app on Vercel (instead of Streamlit)
 - protected by Supabase email/password login
 - history saved to a Supabase Postgres table instead of `st.session_state`
@@ -8,16 +8,23 @@ Same CrewAI/Gemini multi-agent pipeline as the original Streamlit app, now:
 
 ## What changed vs. what didn't
 
-- **Unchanged:** the entire CrewAI agent/task pipeline (planner, researcher,
-  condenser, collector, writer), the Gemini 2.0 Flash model choice, the
-  5-10 random topic count, the visual theme/colors, the download-as-.md
-  behavior, and the "expand/collapse + delete" history UI.
+- **Unchanged:** the pipeline's 5 stages and their exact role/goal/backstory/
+  task text (Topic Planner, Topic Researcher, Summary Generator, Link
+  Collector, Article Prompt Writer), the Gemini 3.5 Flash model choice and
+  temperature, the 5-10 random topic count, the visual theme/colors, the
+  download-as-.md behavior, and the "expand/collapse + delete" history UI.
 - **Changed (because Streamlit can't run on Vercel):** the UI is now a
-  Next.js page instead of a Streamlit script, and the generation function
-  runs as a Vercel Python serverless function (`api/generate.py`) instead
-  of being called inline in `app.py`. The agent/task code inside it is a
-  straight copy of `streamlit_version/generator.py`, just without the
-  Streamlit-only progress callback.
+  Next.js page instead of a Streamlit script, and generation runs as a
+  Vercel Python serverless function (`api/generate.py`).
+- **Changed (forced by Vercel's platform limits):** the pipeline no longer
+  runs through the `crewai` library. CrewAI's own dependency tree
+  (chromadb, onnxruntime, langchain, a kubernetes client, etc.) is ~800MB
+  by itself regardless of which features you use, and Vercel hard-caps
+  serverless functions at 500MB total. `api/generate.py` now calls Gemini
+  directly for each of the 5 stages in sequence, feeding each stage's
+  output into the next — same handoff behavior as CrewAI's sequential
+  process, same prompts, just without the framework. This brought the
+  function down to ~194MB installed.
 
 ## One-time setup
 
@@ -49,10 +56,11 @@ vercel
 ```
 
 Add the same three env vars in Vercel → Project → Settings →
-Environment Variables, then redeploy.
+Environment Variables (for Production, and Preview if you use it), then
+redeploy.
 
-Note: the CrewAI pipeline runs 5 sequential agent calls, which can take
-longer than Vercel's default serverless timeout. `vercel.json` sets
+Note: the pipeline runs 5 sequential Gemini calls, which can take longer
+than Vercel's default serverless timeout. `vercel.json` sets
 `maxDuration: 60` for `api/generate.py` — Vercel's Hobby plan caps
 functions at 60s, so if generation is timing out for you on a busier
 theme, a Pro plan lets you raise this further.

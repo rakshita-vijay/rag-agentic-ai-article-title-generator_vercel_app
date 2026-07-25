@@ -44,7 +44,8 @@ h6 {
 .sidebar {
   width: 320px;
   padding: 30px 20px;
-  border-left: 2px solid var(--dark);
+  border-right: 2px solid var(--dark);
+  order: -1;
 }
 
 .topbar {

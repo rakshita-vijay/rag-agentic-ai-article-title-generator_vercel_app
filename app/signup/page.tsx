@@ -1,10 +1,14 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
+import { createClient } from "../../lib/supabase/client";
 
 export default function SignupPage() {
+  const router = useRouter();
   const supabase = createClient();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -18,7 +22,7 @@ export default function SignupPage() {
     setError(null);
     setMessage(null);
 
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -30,6 +34,14 @@ export default function SignupPage() {
 
     if (error) {
       setError(error.message);
+      return;
+    }
+
+    if (data.session) {
+      // Email confirmation is off in Supabase - the account is already
+      // logged in, so skip straight to the app.
+      router.push("/");
+      router.refresh();
       return;
     }
 
