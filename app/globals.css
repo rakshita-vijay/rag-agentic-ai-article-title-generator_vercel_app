@@ -1,11 +1,11 @@
-@import url("https://fonts.googleapis.com/css2?family=Comic+Neue:wght@700&family=Press+Start+2P&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&family=Press+Start+2P&display=swap");
 
 :root {
   --primary: #9a7bff;
   --secondary: #5e35b1;
   --dark: #1a1a2e;
   --darker: #0d0d1a;
-  --text: #ffffff;
+  --text: rgba(255, 255, 255, 0.88);
 }
 
 * {
@@ -16,6 +16,8 @@ body {
   background-color: var(--darker);
   color: var(--text);
   font-family: "Comic Neue", cursive;
+  font-weight: 400;
+  line-height: 1.6;
   margin: 0;
 }
 
@@ -27,7 +29,31 @@ h5,
 h6 {
   font-family: "Press Start 2P", cursive;
   color: var(--primary);
-  text-shadow: 0 0 10px rgba(154, 123, 255, 0.7);
+  text-shadow: 0 0 4px rgba(154, 123, 255, 0.4);
+  line-height: 1.5;
+  letter-spacing: 0.2px;
+}
+
+h1 {
+  font-size: 18px;
+}
+
+h2 {
+  font-size: 14px;
+}
+
+h3 {
+  font-size: 13px;
+}
+
+h4,
+h5,
+h6 {
+  font-size: 12px;
+}
+
+p {
+  font-weight: 400;
 }
 
 .layout {
@@ -37,12 +63,20 @@ h6 {
 
 .main-col {
   flex: 1;
+  min-width: 0;
   padding: 30px 40px;
+  display: flex;
+  justify-content: center;
+}
+
+.main-col-inner {
+  width: 100%;
   max-width: 900px;
 }
 
 .sidebar {
   width: 320px;
+  flex-shrink: 0;
   padding: 30px 20px;
   border-right: 2px solid var(--dark);
   order: -1;
@@ -103,16 +137,43 @@ input[type="password"] {
 .content-box {
   background-color: var(--dark);
   border-radius: 10px;
-  padding: 15px;
+  padding: 16px 18px;
   border-left: 5px solid var(--primary);
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
   margin: 15px 0;
+  font-size: 15px;
+  line-height: 1.7;
+  font-weight: 400;
+}
+
+.content-box :where(h1, h2, h3, h4, h5, h6) {
+  font-family: "Comic Neue", cursive;
+  font-weight: 700;
+  font-size: 16px;
+  text-shadow: none;
+  color: var(--primary);
+  margin: 16px 0 6px;
+  letter-spacing: normal;
+}
+
+.content-box p {
+  margin: 8px 0;
+}
+
+.content-box ul,
+.content-box ol {
+  padding-left: 22px;
+  margin: 8px 0;
+}
+
+.content-box li {
+  margin: 4px 0;
 }
 
 .history-item {
   background-color: var(--dark);
   border-radius: 10px;
-  padding: 10px;
+  padding: 10px 12px;
   margin: 10px 0;
   border-left: 3px solid var(--primary);
   transition: all 0.2s ease;
@@ -123,10 +184,92 @@ input[type="password"] {
   box-shadow: 0 0 10px rgba(154, 123, 255, 0.5);
 }
 
+.history-item.selected {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  box-shadow: 0 0 12px rgba(154, 123, 255, 0.6);
+}
+
+.history-meta {
+  font-size: 12px;
+  opacity: 0.7;
+  margin: 4px 0;
+}
+
+.history-preview {
+  font-size: 13px;
+  opacity: 0.85;
+  line-height: 1.5;
+  margin: 4px 0;
+}
+
 .history-actions {
   display: flex;
   gap: 8px;
   margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.stage-tracker {
+  margin-top: 14px;
+  background-color: var(--dark);
+  border-radius: 10px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--secondary);
+  font-size: 13px;
+}
+
+.stage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  opacity: 0.55;
+  transition: opacity 0.2s ease;
+}
+
+.stage-row.active {
+  opacity: 1;
+  color: var(--primary);
+}
+
+.stage-row.done {
+  opacity: 0.85;
+}
+
+.stage-icon {
+  width: 18px;
+  text-align: center;
+}
+
+.stage-label {
+  flex: 1;
+}
+
+.stage-time {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+  min-width: 48px;
+  text-align: right;
+}
+
+.stage-total {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-weight: 700;
+  opacity: 0.85;
+}
+
+.pinned-item {
+  margin: 20px 0;
+}
+
+.pinned-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .delete-btn {
@@ -142,9 +285,10 @@ input[type="password"] {
 
 .download-link {
   color: var(--primary);
-  font-weight: bold;
-  font-size: 20px;
+  font-weight: 700;
+  font-size: 16px;
   text-decoration: none;
+  cursor: pointer;
 }
 
 .notification {

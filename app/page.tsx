@@ -15,6 +15,21 @@ type HistoryItem = {
   created_at: string;
 };
 
+type StageKey = "plan" | "research" | "condense" | "write";
+
+type StageTiming = { start: number; end?: number };
+
+const STAGE_DEFS: { key: StageKey; icon: string; label: string }[] = [
+  { key: "plan", icon: "🔮", label: "Planning topics" },
+  { key: "research", icon: "🔎", label: "Researching" },
+  { key: "condense", icon: "🧵", label: "Condensing & collecting links" },
+  { key: "write", icon: "✍️", label: "Writing final output" },
+];
+
+function formatDuration(ms: number) {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 export default function Home() {
   const router = useRouter();
   const supabase = createClient();
@@ -28,9 +43,17 @@ export default function Home() {
     topic_count: number;
   } | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // Items pinned open in the main panel (keyed by history item id)
+  const [pinned, setPinned] = useState<Record<string, boolean>>({});
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Live stage timer state
+  const [activeStage, setActiveStage] = useState<StageKey | null>(null);
+  const [stageTimes, setStageTimes] = useState<Partial<Record<StageKey, StageTiming>>>({});
+  const [genStart, setGenStart] = useState<number | null>(null);
+  const [genEnd, setGenEnd] = useState<number | null>(null);
+  const [, forceTick] = useState(0);
 
   useEffect(() => {
     loadUser();
@@ -40,6 +63,26 @@ export default function Home() {
       Notification.requestPermission();
     }
   }, []);
+
+  // Re-render every 100ms while a stage is running so the live timer ticks
+  useEffect(() => {
+    if (!loading) return;
+    const id = setInterval(() => forceTick((t) => t + 1), 100);
+    return () => clearInterval(id);
+  }, [loading]);
+
+  function startStage(key: StageKey) {
+    setActiveStage(key);
+    setStageTimes((prev) => ({ ...prev, [key]: { start: Date.now() } }));
+  }
+
+  function endStage(key: StageKey) {
+    setStageTimes((prev) => {
+      const existing = prev[key];
+      if (!existing) return prev;
+      return { ...prev, [key]: { ...existing, end: Date.now() } };
+    });
+  }
 
   async function loadUser() {
     const {
@@ -78,6 +121,35 @@ export default function Home() {
     router.refresh();
   }
 
+  async function callStage(token: string, body: Record<string, unknown>) {
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    const raw = await res.text();
+    let data: any;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error(
+        res.status === 504 || /timeout/i.test(raw)
+          ? "Generation timed out on the server - try again, or a shorter/simpler theme."
+          : "The server returned an unexpected response. Please try again."
+      );
+    }
+
+    if (!res.ok) {
+      throw new Error(data.error || "Generation failed");
+    }
+
+    return data;
+  }
+
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
     if (!theme) return;
@@ -85,6 +157,10 @@ export default function Home() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setStageTimes({});
+    setActiveStage(null);
+    setGenEnd(null);
+    setGenStart(Date.now());
 
     const numTopics = Math.floor(Math.random() * 6) + 5; // 5-10, same as original
 
@@ -92,34 +168,51 @@ export default function Home() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
+      const token = session?.access_token ?? "";
+      const base = { theme, num_topics: numTopics };
 
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session?.access_token ?? ""}`,
-        },
-        body: JSON.stringify({ theme, num_topics: numTopics }),
+      startStage("plan");
+      const { output: plannerOutput } = await callStage(token, {
+        ...base,
+        stage: "plan",
       });
+      endStage("plan");
 
-      const raw = await res.text();
-      let data: any;
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        throw new Error(
-          res.status === 504 || /timeout/i.test(raw)
-            ? "Generation timed out on the server - try again, or a shorter/simpler theme."
-            : "The server returned an unexpected response. Please try again."
-        );
-      }
+      startStage("research");
+      const { output: researchOutput } = await callStage(token, {
+        ...base,
+        stage: "research",
+        planner_output: plannerOutput,
+      });
+      endStage("research");
 
-      if (!res.ok) {
-        throw new Error(data.error || "Generation failed");
-      }
+      startStage("condense");
+      const [condenseResult, linksResult] = await Promise.all([
+        callStage(token, {
+          ...base,
+          stage: "condense",
+          research_output: researchOutput,
+        }),
+        callStage(token, {
+          ...base,
+          stage: "links",
+          research_output: researchOutput,
+        }),
+      ]);
+      endStage("condense");
+
+      startStage("write");
+      const { content } = await callStage(token, {
+        ...base,
+        stage: "write",
+        planner_output: plannerOutput,
+        condensed_output: condenseResult.output,
+        links_output: linksResult.output,
+      });
+      endStage("write");
 
       setResult({
-        content: data.content,
+        content,
         theme,
         topic_count: numTopics,
       });
@@ -127,7 +220,7 @@ export default function Home() {
       // Save to history (RLS ensures this only ever writes the caller's own row)
       await supabase.from("history").insert({
         theme,
-        content: data.content,
+        content,
         topic_count: numTopics,
       });
 
@@ -137,6 +230,8 @@ export default function Home() {
       setError(err.message || "Something went wrong");
     } finally {
       setLoading(false);
+      setActiveStage(null);
+      setGenEnd(Date.now());
     }
   }
 
@@ -157,6 +252,24 @@ export default function Home() {
   async function deleteHistoryItem(id: string) {
     await supabase.from("history").delete().eq("id", id);
     setHistory((h) => h.filter((item) => item.id !== id));
+    setPinned((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
+
+  function togglePinned(id: string) {
+    setPinned((prev) => {
+      const next = { ...prev };
+      if (next[id]) {
+        delete next[id];
+      } else {
+        next[id] = true;
+      }
+      return next;
+    });
   }
 
   return (
@@ -185,9 +298,41 @@ export default function Home() {
           />
           <div style={{ marginTop: 12 }}>
             <button type="submit" disabled={loading || !theme}>
-              {loading ? "🔮 AI agents are working..." : "🚀 Generate Topics"}
+              {loading
+                ? activeStage
+                  ? `${STAGE_DEFS.find((s) => s.key === activeStage)?.icon} ${
+                      STAGE_DEFS.find((s) => s.key === activeStage)?.label
+                    } (${STAGE_DEFS.findIndex((s) => s.key === activeStage) + 1}/${STAGE_DEFS.length})...`
+                  : "🔮 Working..."
+                : "🚀 Generate Topics"}
             </button>
           </div>
+
+          {Object.keys(stageTimes).length > 0 && (
+            <div className="stage-tracker">
+              {STAGE_DEFS.map((s) => {
+                const info = stageTimes[s.key];
+                const isActive = activeStage === s.key;
+                const isDone = !!info?.end;
+                const elapsedMs = info ? (info.end ?? Date.now()) - info.start : 0;
+                return (
+                  <div
+                    key={s.key}
+                    className={`stage-row${isActive ? " active" : ""}${isDone ? " done" : ""}`}
+                  >
+                    <span className="stage-icon">{isDone ? "✅" : isActive ? "⏳" : "○"}</span>
+                    <span className="stage-label">
+                      {s.icon} {s.label}
+                    </span>
+                    <span className="stage-time">{info ? formatDuration(elapsedMs) : ""}</span>
+                  </div>
+                );
+              })}
+              {!loading && genStart && genEnd && (
+                <div className="stage-total">Total: {formatDuration(genEnd - genStart)}</div>
+              )}
+            </div>
+          )}
         </form>
 
         {error && <div className="notification error">❌ {error}</div>}
@@ -208,6 +353,25 @@ export default function Home() {
           </>
         )}
 
+        {history
+          .filter((item) => pinned[item.id])
+          .map((item) => (
+            <div className="pinned-item" key={item.id}>
+              <div className="pinned-header">
+                <div>
+                  <strong>
+                    📌 {item.theme} ({item.topic_count} topics)
+                  </strong>
+                  <p className="history-meta">{new Date(item.created_at).toLocaleString()}</p>
+                </div>
+                <button onClick={() => togglePinned(item.id)}>🗜️ Compress</button>
+              </div>
+              <div className="content-box">
+                <ReactMarkdown>{item.content}</ReactMarkdown>
+              </div>
+            </div>
+          ))}
+
         <p style={{ marginTop: 40, opacity: 0.7 }}>
           🤖 Powered by Gemini 3.5 Flash
         </p>
@@ -217,29 +381,19 @@ export default function Home() {
         <h2 style={{ fontSize: 16 }}>📚 Generation History</h2>
         {history.length === 0 && <p>No history yet</p>}
         {history.map((item) => {
-          const isExpanded = !!expanded[item.id];
+          const isPinned = !!pinned[item.id];
           return (
-            <div className="history-item" key={item.id}>
+            <div className={`history-item${isPinned ? " selected" : ""}`} key={item.id}>
               <strong>
                 {item.theme} ({item.topic_count} topics)
               </strong>
-              <p style={{ fontSize: 12, opacity: 0.8 }}>
-                {new Date(item.created_at).toLocaleString()}
-              </p>
+              <p className="history-meta">{new Date(item.created_at).toLocaleString()}</p>
 
-              {isExpanded ? (
-                <ReactMarkdown>{item.content}</ReactMarkdown>
-              ) : (
-                <p>{item.content.slice(0, 200)}...</p>
-              )}
+              <p className="history-preview">{item.content.slice(0, 160)}...</p>
 
               <div className="history-actions">
-                <button
-                  onClick={() =>
-                    setExpanded((e) => ({ ...e, [item.id]: !isExpanded }))
-                  }
-                >
-                  {isExpanded ? "🔙 Collapse" : "🔎 Expand"}
+                <button onClick={() => togglePinned(item.id)}>
+                  {isPinned ? "🗜️ Compress" : "🔎 Expand"}
                 </button>
                 <button
                   onClick={() => downloadMarkdown(item.content, item.theme)}
