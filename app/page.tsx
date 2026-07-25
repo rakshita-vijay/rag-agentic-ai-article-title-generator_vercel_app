@@ -275,6 +275,7 @@ export default function Home() {
   return (
     <div className="layout">
       <div className="main-col">
+        <div className="main-col-inner">
         <div className="topbar">
           <div>
             <h1>✨ Article Topic Generator</h1>
@@ -375,6 +376,7 @@ export default function Home() {
         <p style={{ marginTop: 40, opacity: 0.7 }}>
           🤖 Powered by Gemini 3.5 Flash
         </p>
+        </div>
       </div>
 
       <div className="sidebar">

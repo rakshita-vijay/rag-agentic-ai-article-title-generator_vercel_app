@@ -67,6 +67,7 @@ p {
   padding: 30px 40px;
   display: flex;
   justify-content: center;
+  align-items: flex-start;
 }
 
 .main-col-inner {
