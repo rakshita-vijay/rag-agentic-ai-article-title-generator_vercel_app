@@ -119,12 +119,34 @@ Now produce your output. Follow the instructions and expected output format exac
         response = self.model.generate_content(prompt)
         return response.text
 
+    def _run_raw_prompt(self, prompt):
+        response = self.model.generate_content(prompt)
+        return response.text
+
+    def check_theme(self, theme):
+        """Cheap, single-call pre-check: does the theme look like a typo of a
+        common word/phrase? Used to confirm with the user before spending the
+        full 5-stage pipeline on a misunderstood theme."""
+        prompt = f"""A user typed the following theme into an article-topic generator: "{theme}"
+
+Decide: does this look like a typo or misspelling of a common, well-known word, name, or phrase (e.g. a single wrong, missing, doubled, or swapped letter)? If it's a legitimate but less-common term, proper noun, brand name, or acronym, it is NOT a typo.
+
+If it does look like a typo, give the single most likely intended word or phrase.
+
+Respond with ONLY one line of raw JSON, no markdown code fences, no extra text, in exactly this shape:
+{{"is_typo": true, "suggestion": "corrected term"}}
+or
+{{"is_typo": false, "suggestion": ""}}"""
+        response = self.model.generate_content(prompt)
+        return response.text
+
     def plan(self, theme, number_of_topics):
         return self._run_stage(
             role="Topic Planner",
             goal=f"To collect {number_of_topics} engaging topics related to the theme: {theme}, addressed to an academic audience",
             backstory=f"You have been given a theme - {theme} - and you must collect {number_of_topics} topics related to the theme, for people to write articles about. It can be in-depth core topics related to the theme, or informatory topics as well. Your work is the basis for the user to write an article (college graduate level) on these topics.",
             description=f"""
+            {_theme_typo_guard(theme)}
             1. Identify the latest trends related to {theme}, along with key players and noteworthy news
             2. Identify the target audience based on {theme} and collect relevant headlines/topics
             3. Develop a {theme}-related title list of {number_of_topics} items
@@ -143,7 +165,8 @@ Now produce your output. Follow the instructions and expected output format exac
             role="Topic Researcher",
             goal=f"To collect in-depth information (and their sources) on the {number_of_topics} {theme}-related topics provided by the Topic Planner",
             backstory="For each topic given by the Topic Planner, you will do in-depth research into each, collect information and their source links, and send the links to the Link Collector. Also, you send the relevant informaton you have collected to the Summary Generator.",
-            description="""
+            description=f"""
+            {_theme_typo_guard(theme)}
             For each topic received from the Topic Planner:
             1. Conduct in-depth research on the topic
             2. Use at least 5-6 sources
@@ -237,7 +260,23 @@ Now produce your output. Follow the instructions and expected output format exac
         )
 
 
-VALID_STAGES = {"plan", "research", "condense", "links", "write"}
+VALID_STAGES = {"check_theme", "plan", "research", "condense", "links", "write"}
+
+# Shared instruction injected wherever the raw `theme` string is embedded in a
+# prompt. Themes are free-text from the user and often contain typos (e.g.
+# "bensheet" instead of "balance sheet"); without this, the model treats the
+# typo as a real, novel term and invents a whole fictional topic around it
+# instead of recognizing what the user meant.
+def _theme_typo_guard(theme):
+    return (
+        f'Note on the theme "{theme}": if this looks like a typo or misspelling '
+        "of a common, well-known word, name, or phrase (e.g. a single wrong, "
+        "missing, doubled, or swapped letter), silently treat it as that "
+        "corrected term for everything you write below - do not mention or "
+        "flag the correction, just write about the intended concept. Only "
+        "keep it exactly as given if it's a legitimate but less-common term, "
+        "proper noun, brand name, or acronym."
+    )
 
 
 def run_with_key_rotation(stage_method_name, *args, max_wait_seconds=25):
@@ -303,6 +342,22 @@ def _parse_retry_delay_seconds(error_message, default=5, cap=25):
     return default
 
 
+def _parse_theme_check(raw_text):
+    """Parses the check_theme model output into {is_typo, suggestion}.
+    Fails open (treats it as "not a typo") on any parsing problem so a
+    hiccup here never blocks the person from generating normally."""
+    cleaned = raw_text.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned.strip(), flags=re.MULTILINE).strip()
+    try:
+        data = json.loads(cleaned)
+        return {
+            "is_typo": bool(data.get("is_typo")),
+            "suggestion": (data.get("suggestion") or "").strip(),
+        }
+    except Exception:
+        return {"is_typo": False, "suggestion": ""}
+
+
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
@@ -333,7 +388,11 @@ class handler(BaseHTTPRequestHandler):
             return
 
         try:
-            if stage == "plan":
+            if stage == "check_theme":
+                output = run_with_key_rotation("check_theme", theme)
+                self._respond(200, _parse_theme_check(output))
+
+            elif stage == "plan":
                 output = run_with_key_rotation("plan", theme, num_topics)
                 self._respond(200, {"output": output})
 

@@ -44,6 +44,13 @@ export default function Home() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  // Typo-confirmation step, run once before the real (expensive) pipeline
+  const [checkingTheme, setCheckingTheme] = useState(false);
+  const [themeSuggestion, setThemeSuggestion] = useState<{
+    original: string;
+    suggestion: string;
+  } | null>(null);
+
   // Live stage timer state
   const [activeStage, setActiveStage] = useState<StageKey | null>(null);
   const [stageTimes, setStageTimes] = useState<Partial<Record<StageKey, StageTiming>>>({});
@@ -148,8 +155,56 @@ export default function Home() {
 
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
-    if (!theme) return;
+    if (!theme || loading || checkingTheme) return;
 
+    setError(null);
+    setThemeSuggestion(null);
+    setCheckingTheme(true);
+
+    // Cheap, single-call pre-check for typos (e.g. "bensheet" -> "balance
+    // sheet") before spending the full 5-stage pipeline on a misread theme.
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token ?? "";
+      const check = await callStage(token, { theme, num_topics: 1, stage: "check_theme" });
+      const suggestion = (check.suggestion || "").trim();
+      const isMeaningfulTypo =
+        !!check.is_typo &&
+        suggestion.length > 0 &&
+        suggestion.toLowerCase() !== theme.trim().toLowerCase();
+
+      if (isMeaningfulTypo) {
+        setThemeSuggestion({ original: theme, suggestion });
+        setCheckingTheme(false);
+        return; // wait for the person to confirm which one to use
+      }
+    } catch {
+      // Fail open: if the check itself errors out, don't block the person -
+      // just proceed with the theme exactly as typed.
+    }
+
+    setCheckingTheme(false);
+    await runPipeline(theme);
+  }
+
+  function useSuggestedTheme() {
+    if (!themeSuggestion) return;
+    const chosen = themeSuggestion.suggestion;
+    setTheme(chosen);
+    setThemeSuggestion(null);
+    runPipeline(chosen);
+  }
+
+  function keepOriginalTheme() {
+    if (!themeSuggestion) return;
+    const chosen = themeSuggestion.original;
+    setThemeSuggestion(null);
+    runPipeline(chosen);
+  }
+
+  async function runPipeline(themeToUse: string) {
     setLoading(true);
     setError(null);
     setStageTimes({});
@@ -164,7 +219,7 @@ export default function Home() {
         data: { session },
       } = await supabase.auth.getSession();
       const token = session?.access_token ?? "";
-      const base = { theme, num_topics: numTopics };
+      const base = { theme: themeToUse, num_topics: numTopics };
 
       startStage("plan");
       const { output: plannerOutput } = await callStage(token, {
@@ -209,7 +264,7 @@ export default function Home() {
       // Save to history (RLS ensures this only ever writes the caller's own row)
       const { data: inserted } = await supabase
         .from("history")
-        .insert({ theme, content, topic_count: numTopics })
+        .insert({ theme: themeToUse, content, topic_count: numTopics })
         .select()
         .single();
 
@@ -217,7 +272,7 @@ export default function Home() {
       // The freshly generated report becomes the one and only item shown
       // in the main panel; any previously expanded item is auto-minimized.
       if (inserted) setActiveId(inserted.id);
-      notifyDone(theme);
+      notifyDone(themeToUse);
     } catch (err: any) {
       setError(err.message || "Something went wrong");
     } finally {
@@ -253,6 +308,7 @@ export default function Home() {
     setActiveId((prev) => (prev === id ? null : id));
     if (!loading) {
       setTheme("");
+      setThemeSuggestion(null);
       // The stage tracker belongs to whatever was just generated; once the
       // person switches to viewing a different report, it's stale - hide it.
       setStageTimes({});
@@ -288,8 +344,10 @@ export default function Home() {
             onChange={(e) => setTheme(e.target.value)}
           />
           <div style={{ marginTop: 12 }}>
-            <button type="submit" disabled={loading || !theme}>
-              {loading
+            <button type="submit" disabled={loading || checkingTheme || !theme}>
+              {checkingTheme
+                ? "🔎 Checking theme..."
+                : loading
                 ? activeStage
                   ? `${STAGE_DEFS.find((s) => s.key === activeStage)?.icon} ${
                       STAGE_DEFS.find((s) => s.key === activeStage)?.label
@@ -298,6 +356,21 @@ export default function Home() {
                 : "🚀 Generate Topics"}
             </button>
           </div>
+
+          {themeSuggestion && (
+            <div className="notification">
+              Did you mean <strong>"{themeSuggestion.suggestion}"</strong> instead of "
+              {themeSuggestion.original}"?
+              <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
+                <button type="button" onClick={useSuggestedTheme}>
+                  ✅ Use "{themeSuggestion.suggestion}"
+                </button>
+                <button type="button" onClick={keepOriginalTheme}>
+                  ✍️ Keep "{themeSuggestion.original}"
+                </button>
+              </div>
+            </div>
+          )}
 
           {Object.keys(stageTimes).length > 0 && (
             <div className="stage-tracker">
